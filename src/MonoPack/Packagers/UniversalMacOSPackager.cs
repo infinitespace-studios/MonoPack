@@ -9,18 +9,21 @@ internal sealed class UniversalMacOSPackager : PlatformPackager
     private readonly string _icnsPath;
     private readonly string _x64BuildDir;
     private readonly string _arm64BuildDir;
+    private readonly string _actualExecutableName;
 
     /// <summary>Initializes a new instance of the <see cref="UniversalMacOSPackager"/> class.</summary>
     /// <param name="infoPlistPath">Path to the Info.plist file.</param>
     /// <param name="icnsPath">Path to the .icns icon file.</param>
     /// <param name="x64BuildDir">Directory containing the osx-x64 build artifacts.</param>
     /// <param name="arm64BuildDir">Directory containing the osx-arm64 build artifacts.</param>
-    public UniversalMacOSPackager(string infoPlistPath, string icnsPath, string x64BuildDir, string arm64BuildDir)
+    /// <param name="actualExecutableName">The actual name of the executable file produced by the build.</param>
+    public UniversalMacOSPackager(string infoPlistPath, string icnsPath, string x64BuildDir, string arm64BuildDir, string actualExecutableName)
     {
         _infoPlistPath = infoPlistPath;
         _icnsPath = icnsPath;
         _x64BuildDir = x64BuildDir;
         _arm64BuildDir = arm64BuildDir;
+        _actualExecutableName = actualExecutableName;
     }
 
     /// <inheritdoc/>
@@ -90,11 +93,18 @@ internal sealed class UniversalMacOSPackager : PlatformPackager
 
         // Use lip to create universal executable
         // Use lipo to create universal executable
-        string x64ExecutablePath = Path.Combine(_x64BuildDir, appName);
-        string arm64ExecutablePath = Path.Combine(_arm64BuildDir, appName);
-        string universalExecutablePath = Path.Combine(macOSDir, appName);
+        string x64ExecutablePath = Path.Combine(_x64BuildDir, _actualExecutableName);
+        string arm64ExecutablePath = Path.Combine(_arm64BuildDir, _actualExecutableName);
+        string universalExecutablePath = Path.Combine(macOSDir, _actualExecutableName);
 
         ExecuteLipo(x64ExecutablePath, arm64ExecutablePath, universalExecutablePath);
+
+        // If the app name differs from the actual executable name, rename it
+        if(!_actualExecutableName.Equals(appName, StringComparison.Ordinal))
+        {
+            string renamedPath = Path.Combine(macOSDir, appName);
+            File.Move(universalExecutablePath, renamedPath);
+        }
 
         // Move Content directory to Resources
         string gameContentDir = Path.Combine(macOSDir, "Content");
@@ -140,10 +150,10 @@ internal sealed class UniversalMacOSPackager : PlatformPackager
         }
 
         // Create launcher script that selects the correct architecture at runtime
-        CreateLauncherScript(macOSDir, appName);
+        CreateLauncherScript(macOSDir, appName, _actualExecutableName);
     }
 
-    private static void CreateLauncherScript(string macOSDir, string appName)
+    private static void CreateLauncherScript(string macOSDir, string appName, string actualExecutableName)
     {
         string launchScriptPath = Path.Combine(macOSDir, appName);
         string scriptContent =
@@ -152,9 +162,9 @@ internal sealed class UniversalMacOSPackager : PlatformPackager
 
         cd "$(dirname $BASH_SOURCE)/../Resources"
         if [[ $(uname -p) == 'arm' ]]; then
-          ./../MacOS/arm64/{appName}
+          ./../MacOS/arm64/{actualExecutableName}
         else
-          ./../MacOS/amd64/{appName}
+          ./../MacOS/amd64/{actualExecutableName}
         fi
         """;
 

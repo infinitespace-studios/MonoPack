@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Runtime.Serialization;
 
 namespace MonoPack.Tests;
 
@@ -218,7 +219,6 @@ public sealed class PackagingTests : TestBase
     [Fact]
     public void CustomExecutableName_ShouldAppearInPackage()
     {
-        // Arrange
         string customName = "CustomGameName";
         Options options = new Options
         {
@@ -233,14 +233,212 @@ public sealed class PackagingTests : TestBase
 
         MonoPackService service = new MonoPackService(options);
 
-        // Act
         service.Execute();
 
-        // Assert
         string zipPath = Path.Combine(options.OutputDirectory, $"{customName}-win-x64.zip");
-        Assert.
-
-        True(File.Exists(zipPath), "Archive should be named with custom executable name");
+        Assert.True(File.Exists(zipPath), "Archive should be named with custom executable name");
     }
 
+    [Fact]
+    public void UniversalMacOS_ShouldCreateUniversalAppBundle()
+    {
+        string outputDir = Path.Combine(_testOutputRoot, "universal-macos");
+
+        Options options = new Options
+        {
+            ProjectPath = Path.Combine(_exampleProjectPath, $"{ProjectName}.csproj"),
+            OutputDirectory = outputDir,
+            InfoPlistPath = Path.Combine(_exampleProjectPath, "Info.plist"),
+            IcnsPath = Path.Combine(_exampleProjectPath, "Icon.icns"),
+            UseZipCompression = true,
+            VerboseOutput = true,
+            MacOSUniversal = true
+        };
+
+        options.RuntimeIdentifiers.Add("osx-x64");
+        options.RuntimeIdentifiers.Add("osx-arm64");
+
+        MonoPackService service = new MonoPackService(options);
+
+        service.Execute();
+
+        string zipPath = Path.Combine(outputDir, $"{ProjectName}-universal.zip");
+        Assert.True(File.Exists(zipPath), $"Universal archive not found at: {zipPath}");
+
+        using ZipArchive zipArchive = ZipFile.OpenRead(zipPath);
+        Assert.NotEmpty(zipArchive.Entries);
+
+        // Verify .app bundle structure
+        string appBundleDir = $"{ProjectName}.app";
+        bool allEntriesInAppDirectory = zipArchive.Entries.All(e => e.FullName.StartsWith(appBundleDir, StringComparison.Ordinal));
+        Assert.True(allEntriesInAppDirectory, "All entries should be within .app bundle");
+
+        string macOsDir = Path.Combine(appBundleDir, "Contents", "MacOS");
+        string amd64Dir = Path.Combine(macOsDir, "amd64");
+        string arm64Dir = Path.Combine(macOsDir, "arm64");
+        string executablePath = Path.Combine(macOsDir, ProjectName);
+
+        if (OperatingSystem.IsMacOS())
+        {
+            // On macOS, lipo should create a true universal binary
+            bool hasExecutable = zipArchive.Entries.Any(e => e.FullName.Equals($"{executablePath}", StringComparison.Ordinal));
+            Assert.True(hasExecutable, $"Should contain universal executable at {executablePath}");
+
+            // Should NOT have architecture subdirectories
+            bool hasAmd64Dir = zipArchive.Entries.Any(e => e.FullName.Contains($"{amd64Dir}", StringComparison.Ordinal));
+            Assert.False(hasAmd64Dir, "Should not have amd64 subdirectory (lip creates true universal binary)");
+
+            bool hasArm64Dir = zipArchive.Entries.Any(e => e.FullName.Contains($"{arm64Dir}", StringComparison.Ordinal));
+            Assert.False(hasArm64Dir, "Should not have arm64 subdirectory (lip creates true universal binary)");
+        }
+        else
+        {
+            // On non-macOS, should create architecture subdirectories with launcher script
+            bool hasAmd64Dir = zipArchive.Entries.Any(e => e.FullName.StartsWith(amd64Dir, StringComparison.Ordinal));
+            Assert.True(hasAmd64Dir, "Should contain amd64 subdirectory (script based universal binary)");
+
+            bool hasArm64Dir = zipArchive.Entries.Any(e => e.FullName.StartsWith(arm64Dir, StringComparison.Ordinal));
+            Assert.True(hasArm64Dir, "Should contain arm64 subdirectory (script based universal binary)");
+
+            // Should have launcher script
+            bool hasLauncher = zipArchive.Entries.Any(e => e.FullName.Equals(executablePath, StringComparison.Ordinal));
+            Assert.True(hasLauncher, $"Should contain launcher script at {executablePath}");
+
+            // Verify executables exist in architecture subdirectories
+            string amd64ExecutablePath = Path.Combine(amd64Dir, ProjectName);
+            bool hasAmd64Executable = zipArchive.Entries.Any(e => e.FullName.Equals(amd64ExecutablePath, StringComparison.Ordinal));
+            Assert.True(hasAmd64Executable, "Should contain amd64 executable");
+
+            string arm64ExecutablePath = Path.Combine(arm64Dir, ProjectName);
+            bool hasArm64Executable = zipArchive.Entries.Any(e => e.FullName.Equals(arm64ExecutablePath, StringComparison.Ordinal));
+            Assert.True(hasArm64Executable, "Should contain arm64 executable");
+        }
+    }
+
+    [Fact]
+    public void UniversalMacOS_WithCustomName_ShouldUseCustomName()
+    {
+        string customName = "CustomUniversalApp";
+        string outputDir = Path.Combine(_testOutputRoot, "universal-custom-name");
+
+        Options options = new Options
+        {
+            ProjectPath = Path.Combine(_exampleProjectPath, $"{ProjectName}.csproj"),
+            OutputDirectory = outputDir,
+            ExecutableFileName = customName,
+            InfoPlistPath = Path.Combine(_exampleProjectPath, "Info.plist"),
+            IcnsPath = Path.Combine(_exampleProjectPath, "Icon.icns"),
+            UseZipCompression = true,
+            VerboseOutput = true,
+            MacOSUniversal = true
+        };
+
+        options.RuntimeIdentifiers.Add("osx-x64");
+        options.RuntimeIdentifiers.Add("osx-arm64");
+
+        MonoPackService service = new MonoPackService(options);
+
+        service.Execute();
+
+        string zipPath = Path.Combine(outputDir, $"{customName}-universal.zip");
+        Assert.True(File.Exists(zipPath), $"Universal archive should be named {customName}-universal.zip");
+
+        using ZipArchive zipArchive = ZipFile.OpenRead(zipPath);
+
+        // Verify .app bundle uses custom name
+        string appBundleDir = $"{customName}.app";
+        bool allEntriesInAppDirectory = zipArchive.Entries.All(e => e.FullName.StartsWith(appBundleDir, StringComparison.Ordinal));
+        Assert.True(allEntriesInAppDirectory, $"All entries should be within {customName}.app bundle");
+
+        string macOsDir = Path.Combine(appBundleDir, "Contents", "MacOS");
+        string executablePath = Path.Combine(macOsDir, customName);
+
+        // On macOS, should have the custom named universal binary
+        // On non-macOS, should have the custom named launcher script
+        bool hasExecutable = zipArchive.Entries.Any(e => e.FullName.Equals(executablePath, StringComparison.Ordinal));
+        Assert.True(hasExecutable, $"Should contain universal executable named {customName}");
+    }
+
+    [Theory]
+    [InlineData("osx-x64")]
+    [InlineData("osx-arm64")]
+    public void MacOSSingleArchitecture_ShouldDetermineExecutableName(string rid)
+    {
+        // Don't set ExecutableFileName, let it be determined from MSBuild
+        string outputDir = Path.Combine(_testOutputRoot, $"macos-auto-name-{rid}");
+
+        Options options = new Options
+        {
+            ProjectPath = Path.Combine(_exampleProjectPath, $"{ProjectName}.csproj"),
+            OutputDirectory = outputDir,
+            ExecutableFileName = null,
+            InfoPlistPath = Path.Combine(_exampleProjectPath, "Info.plist"),
+            IcnsPath = Path.Combine(_exampleProjectPath, "Icon.icns"),
+            UseZipCompression = true,
+            VerboseOutput = true
+        };
+
+        options.RuntimeIdentifiers.Add(rid);
+
+        MonoPackService service = new MonoPackService(options);
+
+        service.Execute();
+
+        // The executable name should be determined from MSBuild (which will be ProjectName for the example project)
+        string zipPath = Path.Combine(outputDir, $"{ProjectName}-{rid}.zip");
+        Assert.True(File.Exists(zipPath), $"Archive not found at: {zipPath}");
+
+        using ZipArchive zipArchive = ZipFile.OpenRead(zipPath);
+
+        string appBundleDir = $"{ProjectName}.app";
+        string macOSDir = Path.Combine(appBundleDir, "Contents", "MacOS");
+        string executablePath = Path.Combine(macOSDir, ProjectName);
+        bool hasExecutable = zipArchive.Entries.Any(e => e.FullName.Equals(executablePath, StringComparison.Ordinal));
+        Assert.True(hasExecutable, $"Should contain executable named {ProjectName} (determined from MSBuild)");
+    }
+
+    [Theory]
+    [InlineData("linux-x64")]
+    [InlineData("win-x64")]
+    public void NonMacOSPlatform_ShouldDetermineExecutableName(string rid)
+    {
+        // Don't set ExecutableFileName, let it be determined from MSBuild
+        string outputDir = Path.Combine(_testOutputRoot, $"auto-name-{rid}");
+
+        Options options = new Options
+        {
+            ProjectPath = Path.Combine(_exampleProjectPath, $"{ProjectName}.csproj"),
+            OutputDirectory = outputDir,
+            ExecutableFileName = null,
+            UseZipCompression = true,
+            VerboseOutput = true
+        };
+
+        options.RuntimeIdentifiers.Add(rid);
+
+        MonoPackService service = new MonoPackService(options);
+
+        service.Execute();
+
+        // The executable name should be determined from MSBuild
+        string archivePath = Path.Combine(outputDir, $"{ProjectName}-{rid}.zip");
+        Assert.True(File.Exists(archivePath), $"Archive not found at: {archivePath}");
+
+        using ZipArchive zipArchive = ZipFile.OpenRead(archivePath);
+
+        // Verify the executable is in the archive with correct name
+        string expectedFileName = rid.StartsWith("win", StringComparison.Ordinal) ? $"{ProjectName}.exe" : ProjectName;
+        bool hasExecutable = zipArchive.Entries.Any(e => Path.GetFileName(e.Name).Equals(expectedFileName, StringComparison.Ordinal));
+        Assert.True(hasExecutable, $"Should contain executable named {expectedFileName} (determined from MSBuild)");
+
+        // Verify executable has correct permissions (for non-Windows)
+        if (!rid.StartsWith("win", StringComparison.Ordinal))
+        {
+            ZipArchiveEntry? executableEntry = zipArchive.Entries.FirstOrDefault(e => Path.GetFileName(e.Name).Equals(expectedFileName, StringComparison.Ordinal));
+            Assert.NotNull(executableEntry);
+
+            UnixFileMode permissions = (UnixFileMode)((executableEntry.ExternalAttributes >> 16) & 0x1FF);
+            Assert.True(permissions.HasFlag(UnixFileMode.UserExecute), $"Executable {expectedFileName} should have execute permissions");
+        }
+    }
 }

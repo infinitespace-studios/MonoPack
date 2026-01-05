@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using MonoPack.Builders;
 using MonoPack.Packagers;
 
@@ -39,12 +41,75 @@ internal sealed class MonoPackService
         }
     }
 
+    private string GetActualExecutableName(string? rid = null)
+    {
+        // If user specified a custom executable name via -e option, use that
+        // (the build command will pass this as -p:AssemblyName)
+        if(!string.IsNullOrEmpty(_options.ExecutableFileName))
+        {
+            return _options.ExecutableFileName;
+        }
+
+        // Query MSBuild for the evaluated AssemblyName property
+        try
+        {
+            // Build the arguments with the same properties that would be used
+            // during dotnet publish. This will catch any conditionals that
+            // may be set inside the csproj or props/targets files
+            string arguments = $"msbuild \"{_options.ProjectPath}\" -nologo -getProperty:AssemblyName -p:Configuration=Release";
+            if(!string.IsNullOrEmpty(rid))
+            {
+                arguments += $" -p:RuntimeIdentifier={rid}";
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo()
+            {
+                FileName = "dotnet",
+                Arguments = arguments,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using Process process = new Process() {StartInfo = startInfo};
+            process.Start();
+
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            string error= process.StandardError.ReadToEnd();
+
+            process.WaitForExit();
+
+            if(process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+            {
+                return output;
+            }
+
+            if(_options.VerboseOutput && !string.IsNullOrEmpty(error))
+            {
+                Console.WriteLine($"Warning: Failed to get AssemblyName from MSBuild: {error}");
+            }
+        }
+        catch(Exception ex)
+        {
+            if(_options.VerboseOutput)
+            {
+                Console.WriteLine($"Warning: Could not query MSBuild for AssemblyName: {ex.Message}");
+            }
+        }
+
+        // Fallback to project filename without extension (default MSBuild behavior)
+        return Path.GetFileNameWithoutExtension(_options.ProjectPath);
+    }
+
     private void PackageUniversalMacOS()
     {
         // Create intermediate directory for build outputs
         string tempDir = Path.Combine(Path.GetTempPath(), "MonoPack", Guid.NewGuid().ToString());
         string x64BuildDir = Path.Combine(tempDir, "osx-x64");
         string arm64BuildDir = Path.Combine(tempDir, "osx-arm64");
+
+        string actualExecutableName = GetActualExecutableName("osx-x64");
 
         string projectName = Path.GetFileNameWithoutExtension(_options.ProjectPath);
 
@@ -60,7 +125,7 @@ internal sealed class MonoPackService
             arm64Builder.Build(_options.ProjectPath, arm64BuildDir, "osx-arm64", _options.ExecutableFileName, _options.VerboseOutput, _options.PublishArgs);
 
             // Create universal package
-            UniversalMacOSPackager packager = new UniversalMacOSPackager(_options.InfoPlistPath!, _options.IcnsPath!, x64BuildDir, arm64BuildDir);
+            UniversalMacOSPackager packager = new UniversalMacOSPackager(_options.InfoPlistPath!, _options.IcnsPath!, x64BuildDir, arm64BuildDir, actualExecutableName);
 
             packager.Package(string.Empty, _options.OutputDirectory, projectName, _options.ExecutableFileName, "universal", _options.UseZipCompression);
 
@@ -109,6 +174,8 @@ internal sealed class MonoPackService
         string tempDir = Path.Combine(Path.GetTempPath(), "MonoPack", Guid.NewGuid().ToString());
         string buildOutputDir = Path.Combine(tempDir, rid);
 
+        string actualExecutableName = GetActualExecutableName(rid);
+
         // Extract project name from the project path
         string projectName = Path.GetFileNameWithoutExtension(_options.ProjectPath);
 
@@ -120,7 +187,7 @@ internal sealed class MonoPackService
 
             // Package the build artifacts
             IPlatformPackager packager = PlatformPackagerFactory.CreatePackager(rid, _options.InfoPlistPath, _options.IcnsPath);
-            packager.Package(buildOutputDir, _options.OutputDirectory, projectName, _options.ExecutableFileName, rid, _options.UseZipCompression);
+            packager.Package(buildOutputDir, _options.OutputDirectory, projectName, actualExecutableName, rid, _options.UseZipCompression);
         }
         catch (Exception ex)
         {

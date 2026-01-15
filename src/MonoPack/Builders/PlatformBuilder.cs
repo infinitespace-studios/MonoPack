@@ -5,14 +5,15 @@ namespace MonoPack.Builders;
 /// <summary>Base implementation for platform-specific build strategies</summary>
 internal abstract class PlatformBuilder : IPlatformBuilder
 {
-    /// <summary>Builds the application using dotnet publish.</summary>
+    /// <summary>Builds the application for a specific runtime identifier.</summary>
     /// <param name="projectPath">Path to the project file.</param>
     /// <param name="outputDir">Directory to place build artifacts.</param>
     /// <param name="rid">Runtime identifier for the target platform.</param>
-    /// <param name="executableName">Optional custom name for the executable.</param>
+    /// <param name="suggestedExecutableName">Optional custom name for the executable.</param>
+    /// <param name="actualExecutableName">The parsed executable name.</param>
     /// <param name="verbose">Indicates whether to display verbose output.</param>
     /// <param name="publishArgs">Custom arguments to pass to dotnet publish. When specified, default flags are not applied.</param>
-    public void Build(string projectPath, string outputDir, string rid, string? executableName, bool verbose, string? publishArgs)
+    public void Build(string projectPath, string outputDir, string rid, string? suggestedExecutableName, string actualExecutableName, bool verbose, string? publishArgs)
     {
         Console.WriteLine($"Building {rid}");
 
@@ -24,9 +25,9 @@ internal abstract class PlatformBuilder : IPlatformBuilder
         }
 
         // Use custom assembly name if executable name was given
-        if(!string.IsNullOrEmpty(executableName))
+        if(!string.IsNullOrEmpty(suggestedExecutableName) && (suggestedExecutableName != actualExecutableName))
         {
-            arguments += $"-p:AssemblyName=\"{executableName}\" ";
+            arguments += $"-p:AssemblyName=\"{suggestedExecutableName}\" ";
         }
 
         arguments += $"-o \"{outputDir}\"";

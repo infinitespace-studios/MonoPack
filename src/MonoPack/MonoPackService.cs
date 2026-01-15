@@ -41,15 +41,8 @@ internal sealed class MonoPackService
         }
     }
 
-    private string GetActualExecutableName(string? rid = null)
+    private string GetDefaultExecutableName(string? rid = null)
     {
-        // If user specified a custom executable name via -e option, use that
-        // (the build command will pass this as -p:AssemblyName)
-        if(!string.IsNullOrEmpty(_options.ExecutableFileName))
-        {
-            return _options.ExecutableFileName;
-        }
-
         // Query MSBuild for the evaluated AssemblyName property
         try
         {
@@ -57,7 +50,7 @@ internal sealed class MonoPackService
             // during dotnet publish. This will catch any conditionals that
             // may be set inside the csproj or props/targets files
             string arguments = $"msbuild \"{_options.ProjectPath}\" -nologo -getProperty:AssemblyName -p:Configuration=Release";
-            if(!string.IsNullOrEmpty(rid))
+            if (!string.IsNullOrEmpty(rid))
             {
                 arguments += $" -p:RuntimeIdentifier={rid}";
             }
@@ -72,27 +65,27 @@ internal sealed class MonoPackService
                 CreateNoWindow = true
             };
 
-            using Process process = new Process() {StartInfo = startInfo};
+            using Process process = new Process() { StartInfo = startInfo };
             process.Start();
 
             string output = process.StandardOutput.ReadToEnd().Trim();
-            string error= process.StandardError.ReadToEnd();
+            string error = process.StandardError.ReadToEnd();
 
             process.WaitForExit();
 
-            if(process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
+            if (process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output))
             {
                 return output;
             }
 
-            if(_options.VerboseOutput && !string.IsNullOrEmpty(error))
+            if (_options.VerboseOutput && !string.IsNullOrEmpty(error))
             {
                 Console.WriteLine($"Warning: Failed to get AssemblyName from MSBuild: {error}");
             }
         }
-        catch(Exception ex)
+        catch (Exception ex)
         {
-            if(_options.VerboseOutput)
+            if (_options.VerboseOutput)
             {
                 Console.WriteLine($"Warning: Could not query MSBuild for AssemblyName: {ex.Message}");
             }
@@ -102,6 +95,16 @@ internal sealed class MonoPackService
         return Path.GetFileNameWithoutExtension(_options.ProjectPath);
     }
 
+    private string GetEffectiveExecutableName(string? rid = null)
+    {
+        if (!string.IsNullOrEmpty(_options.ExecutableFileName))
+        {
+            return _options.ExecutableFileName;
+        }
+
+        return GetDefaultExecutableName(rid);
+    }
+
     private void PackageUniversalMacOS()
     {
         // Create intermediate directory for build outputs
@@ -109,7 +112,8 @@ internal sealed class MonoPackService
         string x64BuildDir = Path.Combine(tempDir, "osx-x64");
         string arm64BuildDir = Path.Combine(tempDir, "osx-arm64");
 
-        string actualExecutableName = GetActualExecutableName("osx-x64");
+        string defaultExecutableName = GetDefaultExecutableName("osx-x64");
+        string effectiveExecutablName = GetEffectiveExecutableName("osx-x64");
 
         string projectName = Path.GetFileNameWithoutExtension(_options.ProjectPath);
 
@@ -119,30 +123,30 @@ internal sealed class MonoPackService
             Console.WriteLine("Building universal macOS bundle (osx-x64 + osx-arm64)");
 
             IPlatformBuilder x64Builder = PlatformBuilderFactory.CreateBuilder("osx-x64");
-            x64Builder.Build(_options.ProjectPath, x64BuildDir, "osx-x64", _options.ExecutableFileName, _options.VerboseOutput, _options.PublishArgs);
+            x64Builder.Build(_options.ProjectPath, x64BuildDir, "osx-x64", _options.ExecutableFileName, defaultExecutableName, _options.VerboseOutput, _options.PublishArgs);
 
             IPlatformBuilder arm64Builder = PlatformBuilderFactory.CreateBuilder("osx-arm64");
-            arm64Builder.Build(_options.ProjectPath, arm64BuildDir, "osx-arm64", _options.ExecutableFileName, _options.VerboseOutput, _options.PublishArgs);
+            arm64Builder.Build(_options.ProjectPath, arm64BuildDir, "osx-arm64", _options.ExecutableFileName, defaultExecutableName, _options.VerboseOutput, _options.PublishArgs);
 
             // Create universal package
-            UniversalMacOSPackager packager = new UniversalMacOSPackager(_options.InfoPlistPath!, _options.IcnsPath!, x64BuildDir, arm64BuildDir, actualExecutableName);
+            UniversalMacOSPackager packager = new UniversalMacOSPackager(_options.InfoPlistPath!, _options.IcnsPath!, x64BuildDir, arm64BuildDir, effectiveExecutablName);
 
             packager.Package(string.Empty, _options.OutputDirectory, projectName, _options.ExecutableFileName, "universal", _options.UseZipCompression);
 
             // Process remaining non-macOS runtime identifiers
-            foreach(string rid in _options.RuntimeIdentifiers)
+            foreach (string rid in _options.RuntimeIdentifiers)
             {
-                if(rid != "osx-x64" && rid != "osx-arm64")
+                if (rid != "osx-x64" && rid != "osx-arm64")
                 {
                     PackageForRuntime(rid);
                 }
             }
         }
-        catch(Exception ex)
+        catch (Exception ex)
         {
             Console.Error.WriteLine($"Error creating universal macOS package: {ex.Message}");
 
-            if(_options.VerboseOutput)
+            if (_options.VerboseOutput)
             {
                 Console.Error.WriteLine(ex.StackTrace);
             }
@@ -151,15 +155,15 @@ internal sealed class MonoPackService
         finally
         {
             // Clean up intermediate directory
-            if(Directory.Exists(tempDir))
+            if (Directory.Exists(tempDir))
             {
                 try
                 {
                     Directory.Delete(tempDir, recursive: true);
                 }
-                catch(IOException ex)
+                catch (IOException ex)
                 {
-                    if(_options.VerboseOutput)
+                    if (_options.VerboseOutput)
                     {
                         Console.WriteLine($"Warning: Failed to clean up temporary directory {tempDir}: {ex.Message}");
                     }
@@ -174,7 +178,8 @@ internal sealed class MonoPackService
         string tempDir = Path.Combine(Path.GetTempPath(), "MonoPack", Guid.NewGuid().ToString());
         string buildOutputDir = Path.Combine(tempDir, rid);
 
-        string actualExecutableName = GetActualExecutableName(rid);
+        string defaultExecutableName = GetDefaultExecutableName(rid);
+        string effectiveExecutablName = GetEffectiveExecutableName(rid);
 
         // Extract project name from the project path
         string projectName = Path.GetFileNameWithoutExtension(_options.ProjectPath);
@@ -183,11 +188,11 @@ internal sealed class MonoPackService
         {
             // Build the project for the specified runtime
             IPlatformBuilder builder = PlatformBuilderFactory.CreateBuilder(rid);
-            builder.Build(_options.ProjectPath, buildOutputDir, rid, _options.ExecutableFileName, _options.VerboseOutput, _options.PublishArgs);
+            builder.Build(_options.ProjectPath, buildOutputDir, rid, _options.ExecutableFileName, defaultExecutableName, _options.VerboseOutput, _options.PublishArgs);
 
             // Package the build artifacts
             IPlatformPackager packager = PlatformPackagerFactory.CreatePackager(rid, _options.InfoPlistPath, _options.IcnsPath);
-            packager.Package(buildOutputDir, _options.OutputDirectory, projectName, actualExecutableName, rid, _options.UseZipCompression);
+            packager.Package(buildOutputDir, _options.OutputDirectory, projectName, effectiveExecutablName, rid, _options.UseZipCompression);
         }
         catch (Exception ex)
         {
